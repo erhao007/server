@@ -7,8 +7,10 @@ require (
 	github.com/cockroachdb/pebble v1.1.0
 	github.com/dgraph-io/badger/v4 v4.2.0
 	github.com/go-redis/redis/v8 v8.11.5
+	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/gorilla/websocket v1.5.0
 	github.com/jinzhu/copier v0.3.5
+	github.com/joho/godotenv v1.5.1
 	github.com/rs/xid v1.4.0
 	github.com/stretchr/testify v1.8.1
 	go.etcd.io/bbolt v1.3.5

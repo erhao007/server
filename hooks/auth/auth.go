@@ -29,6 +29,18 @@ func (h *Hook) ID() string {
 	return "auth-ledger"
 }
 
+// Ledger returns the auth ledger used by the hook.
+func (h *Hook) Ledger() *Ledger {
+	return h.ledger
+}
+
+// SetStorage assigns a storage hook to the ledger for persistence.
+func (h *Hook) SetStorage(s LedgerStore) {
+	h.ledger.StorageHook = s
+	// Try to load existing users
+	_ = h.ledger.LoadFromStorage()
+}
+
 // Provides indicates which hook methods this hook provides.
 func (h *Hook) Provides(b byte) bool {
 	return bytes.Contains([]byte{

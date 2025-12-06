@@ -7,10 +7,12 @@ package bolt
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"time"
 
 	mqtt "github.com/mochi-mqtt/server/v2"
+	"github.com/mochi-mqtt/server/v2/hooks/auth"
 	"github.com/mochi-mqtt/server/v2/hooks/storage"
 	"github.com/mochi-mqtt/server/v2/packets"
 	"github.com/mochi-mqtt/server/v2/system"
@@ -523,4 +525,86 @@ func (h *Hook) iterKv(prefix string, visit func([]byte) error) error {
 		h.Log.Error("failed to iter data", "error", err, "prefix", prefix)
 	}
 	return err
+}
+
+// DeleteClient removes a client from the store by id.
+func (h *Hook) DeleteClient(id string) error {
+	if h.db == nil {
+		return storage.ErrDBFileNotOpen
+	}
+	// We construct a fake client to generate the key, or we can just reproduce the key generation logic.
+	// clientKey uses storage.ClientKey + "_" + cl.ID
+	key := storage.ClientKey + "_" + id
+	return h.delKv(key)
+}
+
+// DeleteSubscription removes a subscription from the store.
+func (h *Hook) DeleteSubscription(clientID, filter string) error {
+	if h.db == nil {
+		return storage.ErrDBFileNotOpen
+	}
+	// subscriptionKey uses storage.SubscriptionKey + "_" + cl.ID + ":" + filter
+	key := storage.SubscriptionKey + "_" + clientID + ":" + filter
+	return h.delKv(key)
+}
+
+// DeleteRetained removes a retained message from the store.
+func (h *Hook) DeleteRetained(topic string) error {
+	if h.db == nil {
+		return storage.ErrDBFileNotOpen
+	}
+	// retainedKey uses storage.RetainedKey + "_" + topic
+	key := storage.RetainedKey + "_" + topic
+	return h.delKv(key)
+}
+
+// SaveUser saves a user rule to the store.
+func (h *Hook) SaveUser(u auth.UserRule) error {
+	if h.db == nil {
+		return storage.ErrDBFileNotOpen
+	}
+
+	key := "USER_" + string(u.Username)
+	return h.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(h.config.Bucket))
+		data, err := json.Marshal(u)
+		if err != nil {
+			return err
+		}
+		return bucket.Put([]byte(key), data)
+	})
+}
+
+// DeleteUser removes a user rule from the store.
+func (h *Hook) DeleteUser(username string) error {
+	if h.db == nil {
+		return storage.ErrDBFileNotOpen
+	}
+	key := "USER_" + username
+	return h.delKv(key)
+}
+
+// LoadUsers loads all user rules from the store.
+func (h *Hook) LoadUsers() ([]auth.UserRule, error) {
+	if h.db == nil {
+		return nil, storage.ErrDBFileNotOpen
+	}
+
+	// We need to iterate over keys starting with "USER_"
+	// Since keys are just bytes, we can iterate.
+	// But our iterKv generic might not fit perfectly if we mixed types in same bucket or
+	// if we didn't use prefixes.
+	// But let's assume we use "USER_" prefix.
+
+	var users []auth.UserRule
+	err := h.iterKv("USER_", func(val []byte) error {
+		var u auth.UserRule
+		if err := json.Unmarshal(val, &u); err != nil {
+			return err
+		}
+		users = append(users, u)
+		return nil
+	})
+
+	return users, err
 }

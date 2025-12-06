@@ -11,9 +11,16 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"github.com/mochi-mqtt/server/v2"
+	mqtt "github.com/mochi-mqtt/server/v2"
 	"github.com/mochi-mqtt/server/v2/packets"
 )
+
+// LedgerStore interface for what the hook needs
+type LedgerStore interface {
+	SaveUser(u UserRule) error
+	DeleteUser(username string) error
+	LoadUsers() ([]UserRule, error)
+}
 
 const (
 	Deny      Access = iota // user cannot access the topic
@@ -34,6 +41,8 @@ type UserRule struct {
 	Password RString `json:"password,omitempty" yaml:"password,omitempty"` // the password of a user
 	ACL      Filters `json:"acl,omitempty" yaml:"acl,omitempty"`           // filters to match, if desired
 	Disallow bool    `json:"disallow,omitempty" yaml:"disallow,omitempty"` // allow or disallow the user
+	Remarks  string  `json:"remarks,omitempty" yaml:"remarks,omitempty"`   // remarks for the user
+	IsAdmin  bool    `json:"is_admin,omitempty" yaml:"is_admin,omitempty"` // whether the user is an admin
 }
 
 // AuthRules defines generic access rules applicable to all users.
@@ -120,10 +129,18 @@ func MatchTopic(filter string, topic string) (elements []string, matched bool) {
 
 // Ledger is an auth ledger containing access rules for users and topics.
 type Ledger struct {
-	sync.Mutex `json:"-" yaml:"-"`
-	Users      Users     `json:"users" yaml:"users"`
-	Auth       AuthRules `json:"auth" yaml:"auth"`
-	ACL        ACLRules  `json:"acl" yaml:"acl"`
+	sync.RWMutex `json:"-" yaml:"-"`
+	Users        Users     `json:"users" yaml:"users"`
+	Auth         AuthRules `json:"auth" yaml:"auth"`
+	ACL          ACLRules  `json:"acl" yaml:"acl"`
+	StorageHook  Store     `json:"-" yaml:"-"` // persistence hook
+}
+
+// Store define persistence methods required
+type Store interface {
+	SaveUser(u UserRule) error
+	DeleteUser(username string) error
+	LoadUsers() ([]UserRule, error)
 }
 
 // Update updates the internal values of the ledger.
@@ -134,8 +151,82 @@ func (l *Ledger) Update(ln *Ledger) {
 	l.ACL = ln.ACL
 }
 
+// AddUser adds or updates a user in the ledger.
+func (l *Ledger) AddUser(username string, password string, allow bool, remarks string, isAdmin bool) error {
+	l.Lock()
+	defer l.Unlock()
+	if l.Users == nil {
+		l.Users = make(Users)
+	}
+	user := UserRule{
+		Username: RString(username),
+		Password: RString(password),
+		Disallow: !allow,
+		Remarks:  remarks,
+		IsAdmin:  isAdmin,
+	}
+	l.Users[username] = user
+
+	if l.StorageHook != nil {
+		return l.StorageHook.SaveUser(user)
+	}
+	return nil
+}
+
+// RemoveUser removes a user from the ledger.
+func (l *Ledger) RemoveUser(username string) error {
+	l.Lock()
+	defer l.Unlock()
+	if l.Users == nil {
+		return nil
+	}
+	delete(l.Users, username)
+
+	if l.StorageHook != nil {
+		return l.StorageHook.DeleteUser(username)
+	}
+	return nil
+}
+
+// LoadFromStorage repopulates users from storage
+func (l *Ledger) LoadFromStorage() error {
+	if l.StorageHook == nil {
+		return nil
+	}
+
+	users, err := l.StorageHook.LoadUsers()
+	if err != nil {
+		return err
+	}
+
+	l.Lock()
+	defer l.Unlock()
+	if l.Users == nil {
+		l.Users = make(Users)
+	}
+
+	for _, u := range users {
+		l.Users[string(u.Username)] = u
+	}
+	return nil
+}
+
+// GetUsers returns a list of all users in the ledger.
+func (l *Ledger) GetUsers() []UserRule {
+	l.RLock()
+	defer l.RUnlock()
+	users := make([]UserRule, 0, len(l.Users))
+	for _, u := range l.Users {
+		users = append(users, u)
+	}
+	return users
+}
+
 // AuthOk returns true if the rules indicate the user is allowed to authenticate.
 func (l *Ledger) AuthOk(cl *mqtt.Client, pk packets.Packet) (n int, ok bool) {
+	l.RLock()
+	defer l.RUnlock()
+
 	// If the users map is set, always check for a predefined user first instead
 	// of iterating through global rules.
 	if l.Users != nil {
@@ -163,6 +254,9 @@ func (l *Ledger) AuthOk(cl *mqtt.Client, pk packets.Packet) (n int, ok bool) {
 // ACLOk returns true if the rules indicate the user is allowed to read or write to
 // a specific filter or topic respectively, based on the `write` bool.
 func (l *Ledger) ACLOk(cl *mqtt.Client, topic string, write bool) (n int, ok bool) {
+	l.RLock()
+	defer l.RUnlock()
+
 	// If the users map is set, always check for a predefined user first instead
 	// of iterating through global rules.
 	if l.Users != nil {
@@ -220,13 +314,20 @@ func (l *Ledger) ACLOk(cl *mqtt.Client, topic string, write bool) (n int, ok boo
 	return 0, true
 }
 
+// Methods were replaced with new versions that support storage.
+// Removing old non-error returning versions.
+
 // ToJSON encodes the values into a JSON string.
 func (l *Ledger) ToJSON() (data []byte, err error) {
+	l.RLock()
+	defer l.RUnlock()
 	return json.Marshal(l)
 }
 
 // ToYAML encodes the values into a YAML string.
 func (l *Ledger) ToYAML() (data []byte, err error) {
+	l.RLock()
+	defer l.RUnlock()
 	return yaml.Marshal(l)
 }
 

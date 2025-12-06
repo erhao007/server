@@ -63,12 +63,29 @@ MQTT 代表 MQ Telemetry Transport。它是一种发布/订阅、非常简单和
 
 ## 快速开始(Quick Start)
 ### 使用 Go 运行服务端
-Mochi MQTT 可以作为独立的中间件使用。只需拉取此仓库代码，然后在 [cmd](cmd) 文件夹中运行 [cmd/main.go](cmd/main.go) ，默认将开启下面几个服务端口， tcp (:1883)、websocket (:1882) 和服务状态监控 (:8080) 。
+Mochi MQTT 可以作为独立的中间件使用。只需拉取此仓库代码，然后在 [cmd](cmd) 文件夹中运行 [cmd/main.go](cmd/main.go) ，默认将开启下面几个服务端口：
+
+- **TCP**: `:1883` (MQTT)
+- **Websocket**: `:1882` (MQTT over WS)
+- **管理后台**: `:8888` (Web UI)
 
 ```
 cd cmd
-go build -o mqtt && ./mqtt
+go build -o server cmd/main.go && ./server
 ```
+
+启动后，访问 [http://localhost:8888](http://localhost:8888) 即可进入全新的中文管理后台。
+
+### 管理后台 (Web UI)
+管理后台现在默认开启，并提供以下功能：
+- **控制台**: 实时查看服务器状态（连接数、消息数、系统资源等）。
+- **端口管理**: 添加或删除 TCP/Websocket 监听端口。
+- **授权管理**: 管理用户（账号密码、备注），支持持久化编辑。
+- **持久化**: 查看和管理 BoltDB 中的持久化数据（客户端、订阅、保留消息）。
+
+### 配置与持久化
+- **配置文件**: 服务器启动时会自动读取当前目录下的 `.env` 文件，如果不存在则会自动生成默认配置。
+- **持久化**: 数据默认存储在当前目录下的 `data.db` 文件中（使用 BoltDB），包括用户授权信息、客户端会话、订阅关系和保留消息。
 
 ### 使用 Docker
 

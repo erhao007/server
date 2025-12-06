@@ -67,6 +67,17 @@ func (l *Listeners) Get(id string) (Listener, bool) {
 	return val, ok
 }
 
+// GetAll returns a copy of the listeners map.
+func (l *Listeners) GetAll() map[string]Listener {
+	l.RLock()
+	defer l.RUnlock()
+	m := make(map[string]Listener)
+	for k, v := range l.internal {
+		m[k] = v
+	}
+	return m
+}
+
 // Len returns the length of the listeners map.
 func (l *Listeners) Len() int {
 	l.RLock()
