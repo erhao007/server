@@ -99,6 +99,13 @@ export default {
     updateMdnsConfig(enabled: boolean, name: string) {
         return client.post('/mdns', { enabled, name });
     },
+    // TLS
+    getTlsConfig() {
+        return client.get<{ enabled: boolean, port: string, cert: string, key: string }>('/tls');
+    },
+    updateTlsConfig(enabled: boolean, port: string, cert: string, key: string) {
+        return client.post('/tls', { enabled, port, cert, key });
+    },
     getStats() {
         return client.get<any>('/stats');
     },

@@ -92,18 +92,52 @@ INFO_PORT=:8080
 	// Wire storage to auth hook for persistence
 	authHook.SetStorage(storageHook)
 
+	// Settings
+	settings := management.NewSettingsManager()
+
+	// Sync Env to Settings if first run/override?
+	// For simplicity, let's respect Settings file if exists.
+	// If mdns enabled in env, ensure it's enabled in settings?
+	if os.Getenv("MDNS_ENABLED") == "true" {
+		mdnsCfg := settings.GetMDNS()
+		// Only update if not already enabled? Or force?
+		// Let's force update from Env to ensure Docker env vars work.
+		mdnsCfg.Enabled = true
+		if name := os.Getenv("MDNS_NAME"); name != "" {
+			mdnsCfg.Name = name
+		}
+		_ = settings.UpdateMDNS(mdnsCfg)
+	}
+
 	// mDNS Service
 	mdns := management.NewMdnsService(server.Log)
-	mdnsEnabled := os.Getenv("MDNS_ENABLED") == "true"
-	mdnsName := os.Getenv("MDNS_NAME")
-	// Use default port 1883 for mDNS advertisement for now
-	_ = mdns.Configure(mdnsEnabled, mdnsName, 1883)
+	mdnsCfg := settings.GetMDNS()
+	_ = mdns.Configure(mdnsCfg.Enabled, mdnsCfg.Name, mdnsCfg.Port)
+
+	// TLS Listener from Settings
+	tlsSettings := settings.GetTLS()
+	if tlsSettings.Enabled && tlsSettings.Cert != "" && tlsSettings.Key != "" {
+		cert, err := tls.X509KeyPair([]byte(tlsSettings.Cert), []byte(tlsSettings.Key))
+		if err == nil {
+			tlsConfig := &tls.Config{
+				Certificates: []tls.Certificate{cert},
+			}
+			tcp := listeners.NewTCP(listeners.Config{
+				ID:        "mqtts",
+				Address:   tlsSettings.Port,
+				TLSConfig: tlsConfig,
+			})
+			_ = server.AddListener(tcp)
+		} else {
+			server.Log.Error("failed to load stored tls config", "error", err)
+		}
+	}
 
 	if mgmtAddr != "" {
 		mgmt := management.New(listeners.Config{
 			ID:      "mgmt",
 			Address: mgmtAddr,
-		}, server, authHook, storageHook, mdns)
+		}, server, authHook, storageHook, mdns, settings)
 		err := server.AddListener(mgmt)
 		if err != nil {
 			log.Fatal(err)

@@ -2,6 +2,7 @@ package management
 
 import (
 	"context"
+	"crypto/tls"
 	"embed"
 	"encoding/json"
 	"io/fs"
@@ -44,6 +45,7 @@ type Management struct {
 	authHook    *auth.Hook       // reference to the auth hook
 	storageHook *bolt.Hook       // reference to the storage hook
 	mdns        *MdnsService     // mDNS service
+	settings    *SettingsManager // Settings
 	jwtKey      []byte           // key for signing JWTs
 }
 
@@ -51,7 +53,7 @@ type Management struct {
 var distFS embed.FS
 
 // New initializes and returns a new Management listener.
-func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, storageHook *bolt.Hook, mdns *MdnsService) *Management {
+func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, storageHook *bolt.Hook, mdns *MdnsService, settings *SettingsManager) *Management {
 	// Simple secret retrieval, better from config
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
@@ -66,6 +68,7 @@ func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, stor
 		authHook:    authHook,
 		storageHook: storageHook,
 		mdns:        mdns,
+		settings:    settings,
 		jwtKey:      []byte(secret),
 	}
 }
@@ -108,6 +111,7 @@ func (l *Management) Init(log *slog.Logger) error {
 	mux.HandleFunc("/api/v1/users/", l.authMiddleware(l.handleUserDelete))
 	mux.HandleFunc("/api/v1/stats", l.authMiddleware(l.handleStats))
 	mux.HandleFunc("/api/v1/mdns", l.authMiddleware(l.handleMdns))
+	mux.HandleFunc("/api/v1/tls", l.authMiddleware(l.handleTls))
 
 	// Storage Endpoints (Protected)
 	mux.HandleFunc("/api/v1/storage/clients", l.authMiddleware(l.handleStoredClients))
@@ -170,35 +174,120 @@ func (l *Management) Init(log *slog.Logger) error {
 }
 
 func (l *Management) handleMdns(w http.ResponseWriter, r *http.Request) {
-	if l.mdns == nil {
-		l.jsonError(w, "mdns service not available", http.StatusServiceUnavailable)
+	if l.mdns == nil || l.settings == nil {
+		l.jsonError(w, "service not available", http.StatusServiceUnavailable)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		enabled, name, port := l.mdns.Config()
-		l.jsonResponse(w, map[string]any{
-			"enabled": enabled,
-			"name":    name,
-			"port":    port,
-		}, http.StatusOK)
+		cfg := l.settings.GetMDNS()
+		l.jsonResponse(w, cfg, http.StatusOK)
 
 	case http.MethodPost:
-		var req struct {
-			Enabled bool   `json:"enabled"`
-			Name    string `json:"name"`
-		}
+		var req MDNSConfig
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			l.jsonError(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		_, _, port := l.mdns.Config() // Keep existing port
-		if err := l.mdns.Configure(req.Enabled, req.Name, port); err != nil {
-			l.jsonError(w, err.Error(), http.StatusInternalServerError)
+		if err := l.settings.UpdateMDNS(req); err != nil {
+			l.jsonError(w, "failed to save settings: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
+
+		// Use configured port or default 1883 if configured 0?
+		// If port is 0, keeping 1883 or whatever defaults.
+		// settings.go defaults port to 1883.
+		if err := l.mdns.Configure(req.Enabled, req.Name, req.Port); err != nil {
+			l.jsonError(w, "failed to configure mdns: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		l.jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
+
+	default:
+		l.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (l *Management) handleTls(w http.ResponseWriter, r *http.Request) {
+	if l.settings == nil {
+		l.jsonError(w, "settings not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		cfg := l.settings.GetTLS()
+		// Redact sensitive data
+		if cfg.Key != "" {
+			cfg.Key = "********"
+		}
+		if cfg.Cert != "" {
+			// Optional: maybe truncate?
+		}
+		l.jsonResponse(w, cfg, http.StatusOK)
+
+	case http.MethodPost:
+		var req TLSConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			l.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		// Merge with existing if empty (handling masking)
+		current := l.settings.GetTLS()
+		if req.Cert == "" {
+			req.Cert = current.Cert
+		}
+		if req.Key == "" || req.Key == "********" {
+			req.Key = current.Key
+		}
+		if req.Port == "" {
+			req.Port = current.Port
+		}
+
+		var tlsConfig *tls.Config
+		if req.Enabled {
+			if req.Cert == "" || req.Key == "" {
+				l.jsonError(w, "cert and key required", http.StatusBadRequest)
+				return
+			}
+			// Validate Cert/Key
+			cert, err := tls.X509KeyPair([]byte(req.Cert), []byte(req.Key))
+			if err != nil {
+				l.jsonError(w, "invalid cert/key: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+			tlsConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+		}
+
+		if err := l.settings.UpdateTLS(req); err != nil {
+			l.jsonError(w, "failed to save settings: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Apply Changes
+		// Stop existing listener if any
+		id := "mqtts"
+		l.orgServer.Listeners.Close(id, func(id string) {})
+		l.orgServer.Listeners.Delete(id)
+
+		if req.Enabled && tlsConfig != nil {
+			tcp := listeners.NewTCP(listeners.Config{
+				ID:        id,
+				Address:   req.Port,
+				TLSConfig: tlsConfig,
+			})
+			if err := l.orgServer.AddListener(tcp); err != nil {
+				l.jsonError(w, "saved but failed to start listener: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+
+			// Start serving asynchronously
+			go l.orgServer.Listeners.Serve(id, l.orgServer.EstablishConnection)
+		}
+
 		l.jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
 
 	default:
