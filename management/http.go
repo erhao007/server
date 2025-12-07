@@ -43,6 +43,7 @@ type Management struct {
 	orgServer   *mqtt.Server     // reference to the main server instance
 	authHook    *auth.Hook       // reference to the auth hook
 	storageHook *bolt.Hook       // reference to the storage hook
+	mdns        *MdnsService     // mDNS service
 	jwtKey      []byte           // key for signing JWTs
 }
 
@@ -50,7 +51,7 @@ type Management struct {
 var distFS embed.FS
 
 // New initializes and returns a new Management listener.
-func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, storageHook *bolt.Hook) *Management {
+func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, storageHook *bolt.Hook, mdns *MdnsService) *Management {
 	// Simple secret retrieval, better from config
 	secret := os.Getenv("JWT_SECRET")
 	if secret == "" {
@@ -64,9 +65,12 @@ func New(config listeners.Config, server *mqtt.Server, authHook *auth.Hook, stor
 		orgServer:   server,
 		authHook:    authHook,
 		storageHook: storageHook,
+		mdns:        mdns,
 		jwtKey:      []byte(secret),
 	}
 }
+
+// ...
 
 // ID returns the id of the listener.
 func (l *Management) ID() string {
@@ -103,6 +107,7 @@ func (l *Management) Init(log *slog.Logger) error {
 	mux.HandleFunc("/api/v1/users", l.authMiddleware(l.handleUsers))
 	mux.HandleFunc("/api/v1/users/", l.authMiddleware(l.handleUserDelete))
 	mux.HandleFunc("/api/v1/stats", l.authMiddleware(l.handleStats))
+	mux.HandleFunc("/api/v1/mdns", l.authMiddleware(l.handleMdns))
 
 	// Storage Endpoints (Protected)
 	mux.HandleFunc("/api/v1/storage/clients", l.authMiddleware(l.handleStoredClients))
@@ -162,6 +167,43 @@ func (l *Management) Init(log *slog.Logger) error {
 	}
 
 	return nil
+}
+
+func (l *Management) handleMdns(w http.ResponseWriter, r *http.Request) {
+	if l.mdns == nil {
+		l.jsonError(w, "mdns service not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		enabled, name, port := l.mdns.Config()
+		l.jsonResponse(w, map[string]any{
+			"enabled": enabled,
+			"name":    name,
+			"port":    port,
+		}, http.StatusOK)
+
+	case http.MethodPost:
+		var req struct {
+			Enabled bool   `json:"enabled"`
+			Name    string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			l.jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		_, _, port := l.mdns.Config() // Keep existing port
+		if err := l.mdns.Configure(req.Enabled, req.Name, port); err != nil {
+			l.jsonError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		l.jsonResponse(w, map[string]string{"status": "ok"}, http.StatusOK)
+
+	default:
+		l.jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 const installLockFile = "install.lock"

@@ -92,11 +92,18 @@ INFO_PORT=:8080
 	// Wire storage to auth hook for persistence
 	authHook.SetStorage(storageHook)
 
+	// mDNS Service
+	mdns := management.NewMdnsService(server.Log)
+	mdnsEnabled := os.Getenv("MDNS_ENABLED") == "true"
+	mdnsName := os.Getenv("MDNS_NAME")
+	// Use default port 1883 for mDNS advertisement for now
+	_ = mdns.Configure(mdnsEnabled, mdnsName, 1883)
+
 	if mgmtAddr != "" {
 		mgmt := management.New(listeners.Config{
 			ID:      "mgmt",
 			Address: mgmtAddr,
-		}, server, authHook, storageHook)
+		}, server, authHook, storageHook, mdns)
 		err := server.AddListener(mgmt)
 		if err != nil {
 			log.Fatal(err)

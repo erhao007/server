@@ -22,6 +22,9 @@
         <el-menu-item index="/storage">
           <span>持久化</span>
         </el-menu-item>
+        <el-menu-item index="/settings">
+          <span>系统设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     <el-container>

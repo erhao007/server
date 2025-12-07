@@ -10,6 +10,16 @@ const routes: Array<RouteRecordRaw> = [
     { path: '/users', component: () => import('../views/Users.vue') },
     { path: '/storage', component: () => import('../views/Storage.vue') },
     {
+        path: '/storage',
+        name: 'Storage',
+        component: () => import('../views/Storage.vue'),
+    },
+    {
+        path: '/settings',
+        name: 'Settings',
+        component: () => import('../views/Settings.vue'),
+    },
+    {
         path: '/install',
         name: 'Install',
         component: () => import('../views/Install.vue'),

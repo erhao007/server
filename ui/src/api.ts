@@ -92,6 +92,13 @@ export default {
     install(username: string, password: string) {
         return client.post('/install', { username, password });
     },
+    // Settings
+    getMdnsConfig() {
+        return client.get<{ enabled: boolean, name: string, port: number }>('/mdns');
+    },
+    updateMdnsConfig(enabled: boolean, name: string) {
+        return client.post('/mdns', { enabled, name });
+    },
     getStats() {
         return client.get<any>('/stats');
     },
