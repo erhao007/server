@@ -4,3 +4,5 @@ cmd/mqtt
 .idea
 vendor
 server-bin
+server-linux
+server
