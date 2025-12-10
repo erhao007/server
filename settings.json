@@ -1,0 +1,13 @@
+{
+  "mdns": {
+    "enabled": true,
+    "name": "Mochi MQTT",
+    "port": 1883
+  },
+  "tls": {
+    "enabled": false,
+    "port": ":8883",
+    "cert": "",
+    "key": ""
+  }
+}
